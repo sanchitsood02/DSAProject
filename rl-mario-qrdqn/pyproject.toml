@@ -1,0 +1,64 @@
+ [build-system]
+ requires = ["setuptools>=69", "wheel"]
+ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "mario-qr-dqn"
+version = "0.1.0"
+ description = "Portfolio-grade QR-DQN agent for Super Mario Bros with replay, CNN encoder, and epsilon decay."
+ readme = "README.md"
+ requires-python = ">=3.10"
+ license = {text = "MIT"}
+ authors = [{name = "Your Name"}]
+ dependencies = [
+   "numpy>=1.24",
+   "torch>=2.1",
+ ]
+ 
+ [project.optional-dependencies]
+ mario = [
+   "gymnasium>=0.29",
+   "gym-super-mario-bros>=7.4.0",
+   "nes-py>=8.2.1",
+   "opencv-python>=4.8",
+   "tqdm>=4.66",
+ ]
+ dev = [
+   "pytest>=7.4",
+   "ruff>=0.4",
+   "mypy>=1.8",
+   "types-tqdm",
+ ]
+ 
+ [project.scripts]
+ mario-train = "mario_rl.scripts.train:main"
+ mario-eval = "mario_rl.scripts.eval:main"
+ 
+ [tool.setuptools]
+ package-dir = {"" = "src"}
+ 
+ [tool.setuptools.packages.find]
+ where = ["src"]
+ 
+ [tool.ruff]
+ line-length = 100
+ target-version = "py310"
+ 
+ [tool.ruff.lint]
+ select = ["E", "F", "I", "B", "UP"]
+ 
+ [tool.mypy]
+ python_version = "3.10"
+ strict = true
+ warn_unreachable = true
+ show_error_codes = true
+ pretty = true
+ packages = ["mario_rl"]
+
+[[tool.mypy.overrides]]
+module = ["gymnasium", "gym_super_mario_bros", "gym_super_mario_bros.*", "nes_py", "nes_py.*", "cv2"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["mario_rl.agent"]
+disable_error_code = ["no-untyped-call"]
