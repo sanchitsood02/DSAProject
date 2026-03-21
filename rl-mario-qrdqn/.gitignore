@@ -1,21 +1,21 @@
- __pycache__/
- *.py[cod]
- *.so
- .mypy_cache/
- .pytest_cache/
- .ruff_cache/
- .venv/
- venv/
- env/
- dist/
- build/
- *.egg-info/
- .DS_Store
- 
- runs/
- checkpoints/
- videos/
- wandb/
- 
- data/
- models/
+__pycache__/
+*.py[cod]
+*.so
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+runs/
+checkpoints/
+videos/
+wandb/
+
+data/
+models/

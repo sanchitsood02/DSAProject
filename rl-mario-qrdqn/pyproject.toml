@@ -4,7 +4,7 @@
  
  [project]
  name = "mario-qr-dqn"
-version = "0.2.0"
+version = "0.3.0"
  description = "Portfolio-grade QR-DQN agent for Super Mario Bros with replay, CNN encoder, and epsilon decay."
  readme = "README.md"
  requires-python = ">=3.10"
