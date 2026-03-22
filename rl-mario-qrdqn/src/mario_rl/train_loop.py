@@ -3,17 +3,18 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
 
-from mario_rl.agent import QrDqnAgent
-from mario_rl.config import EnvConfig, TrainingConfig
+from mario_rl.agent import DqnAgent, QrDqnAgent
+from mario_rl.config import EnvConfig, EpsilonSchedule, TrainingConfig
 from mario_rl.env import make_mario_env
-from mario_rl.networks import QuantileCnn
+from mario_rl.networks import DqnCnn, QuantileCnn
 from mario_rl.replay import ReplayBuffer
 
 
@@ -52,6 +53,7 @@ def train(cfg: TrainingConfig, env_cfg: EnvConfig, device: torch.device) -> Path
         frame_stack=env_cfg.frame_stack,
         resize_hw=env_cfg.resize_hw,
         grayscale=env_cfg.grayscale,
+        render_mode="human" if render else None,
     )
 
     obs_space = env.observation_space
@@ -174,3 +176,134 @@ def train(cfg: TrainingConfig, env_cfg: EnvConfig, device: torch.device) -> Path
     )
     log.info("final_checkpoint=%s", final_ckpt.as_posix())
     return final_ckpt
+
+
+def train_mario_new(
+    env_cfg: EnvConfig,
+    device: torch.device,
+    episodes: int = 100,
+    lr: float = 1e-4,
+    batch_size: int = 128,
+    gamma: float = 0.99,
+    replay_capacity: int = 50_000,
+    learning_starts: int = 10_000,
+    target_update_every: int = 2_000,
+    eps: EpsilonSchedule | None = None,
+    freeze_limit: int = 60,
+    model_path: Path = Path("models") / "mario_dqn.pt",
+    render: bool = True,
+    seed: int = 42,
+) -> Path:
+    _setup_logging()
+    log = logging.getLogger("mario_rl.mario_new")
+    log.info("device=%s", device)
+
+    env = make_mario_env(
+        env_id=env_cfg.env_id,
+        frame_skip=env_cfg.frame_skip,
+        frame_stack=env_cfg.frame_stack,
+        resize_hw=env_cfg.resize_hw,
+        grayscale=env_cfg.grayscale,
+        render_mode="human" if render else None,
+    )
+
+    obs_space = env.observation_space
+    act_space = env.action_space
+    in_channels = int(obs_space.shape[0])
+    n_actions = int(act_space.n)
+
+    online = DqnCnn(in_channels=in_channels, n_actions=n_actions)
+    target = DqnCnn(in_channels=in_channels, n_actions=n_actions)
+
+    eps_sched = eps if eps is not None else EpsilonSchedule(start=1.0, end=0.1, decay_steps=200_000)
+    agent = DqnAgent(
+        online_net=online,
+        target_net=target,
+        lr=lr,
+        gamma=gamma,
+        eps=eps_sched,
+        grad_clip_norm=10.0,
+        device=device,
+    )
+
+    buffer = ReplayBuffer(capacity=replay_capacity)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    start_episode = 1
+    step = 0
+
+    if model_path.exists():
+        ckpt = torch.load(model_path, map_location=device)
+        if isinstance(ckpt, dict) and "online_state_dict" in ckpt:
+            online_sd = cast(Mapping[str, Any], ckpt["online_state_dict"])
+            target_sd = cast(Mapping[str, Any], ckpt.get("target_state_dict") or ckpt["online_state_dict"])
+            agent.online.load_state_dict(online_sd)
+            agent.target.load_state_dict(target_sd)
+            if "optimizer_state_dict" in ckpt:
+                agent.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            start_episode = int(ckpt.get("episode", 0)) + 1
+            step = int(ckpt.get("step", 0))
+            log.info(
+                "loaded_model=%s episode=%d step=%d",
+                model_path.as_posix(),
+                start_episode,
+                step,
+            )
+
+    for ep in range(start_episode, start_episode + int(episodes)):
+        obs, info = env.reset(seed=seed + ep)
+        if isinstance(info, dict) and "frozen" in info:
+            info.pop("frozen", None)
+        ep_return = 0.0
+        ep_len = 0
+        done = False
+
+        while not done:
+            step += 1
+            action = agent.act(obs, step=step)
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            done = bool(terminated or truncated)
+            buffer.add(obs=obs, action=action, reward=float(reward), next_obs=next_obs, done=done)
+            obs = next_obs
+            ep_return += float(reward)
+            ep_len += 1
+
+            if render:
+                env.render()
+
+            if buffer.size >= max(batch_size, learning_starts):
+                batch = buffer.sample(batch_size=batch_size, device=device)
+                result = agent.train_step(batch)
+                if step % target_update_every == 0:
+                    agent.sync_target()
+                if step % 500 == 0:
+                    log.info(
+                        "episode=%d step=%d loss=%.5f mean_q=%.3f eps=%.3f",
+                        ep,
+                        step,
+                        result.loss,
+                        result.mean_q,
+                        agent.epsilon(step),
+                    )
+
+        frozen = bool(info.get("frozen", False)) if isinstance(info, dict) else False
+        log.info("episode=%d return=%.1f len=%d frozen=%s", ep, ep_return, ep_len, frozen)
+
+        payload = {
+            "episode": int(ep),
+            "step": int(step),
+            "online_state_dict": agent.online.state_dict(),
+            "target_state_dict": agent.target.state_dict(),
+            "optimizer_state_dict": agent.optimizer.state_dict(),
+            "extra": {
+                "model": {"in_channels": in_channels, "n_actions": n_actions},
+                "freeze_limit": int(freeze_limit),
+            },
+        }
+        torch.save(payload, model_path)
+
+    env.close()
+    log.info("final_model=%s", model_path.as_posix())
+    return model_path

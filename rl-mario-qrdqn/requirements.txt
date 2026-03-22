@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch>=2.1
+numpy<2.0
+gymnasium>=0.29
+gym-super-mario-bros>=7.4.0
+nes-py>=8.2.1
+opencv-python>=4.8
+tqdm>=4.66

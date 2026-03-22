@@ -20,6 +20,9 @@ def make_mario_env(
     frame_stack: int,
     resize_hw: tuple[int, int],
     grayscale: bool,
+    freeze_limit: int = 60,
+    reward_shaping: bool = False,
+    render_mode: str | None = None,
 ) -> Any:
     try:
         importlib.import_module("gymnasium")
@@ -41,12 +44,100 @@ def make_mario_env(
     except ModuleNotFoundError:
         _require("nes-py")
 
-    env = gym_super_mario_bros.make(env_id)
+    kwargs: dict[str, Any] = {
+        "apply_api_compatibility": True,
+        "disable_env_checker": True,
+    }
+    if render_mode is not None:
+        kwargs["render_mode"] = render_mode
+
+    env = gym_super_mario_bros.make(env_id, **kwargs)
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = RewardAndFreezeEnv(env, freeze_limit=freeze_limit)
     env = MaxAndSkipEnv(env, skip=frame_skip)
     env = PreprocessObs(env, resize_hw=resize_hw, grayscale=grayscale)
     env = FrameStack(env, k=frame_stack)
     return env
+
+
+class RewardAndFreezeEnv:
+    def __init__(self, env: Any, freeze_limit: int) -> None:
+        self.env = env
+        self.freeze_limit = int(freeze_limit)
+        if self.freeze_limit <= 0:
+            raise ValueError("freeze_limit must be positive")
+
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+        self._last_x: int | None = None
+        self._stuck_steps = 0
+
+    def reset(self, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
+        self._last_x = None
+        self._stuck_steps = 0
+        seed = kwargs.pop("seed", None)
+        try:
+            if seed is None:
+                result = self.env.reset(**kwargs)
+            else:
+                result = self.env.reset(seed=seed, **kwargs)
+        except TypeError:
+            result = self.env.reset(**kwargs)
+            if seed is not None and hasattr(self.env, "seed"):
+                try:
+                    self.env.seed(seed)
+                except Exception:
+                    pass
+
+        if isinstance(result, tuple) and len(result) == 2:
+            obs, info = result
+        else:
+            obs, info = result, {}
+        self._last_x = int(info.get("x_pos", 0)) if isinstance(info, dict) else 0
+        return obs, info
+
+    def step(self, action: Any) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+        result = self.env.step(action)
+        if isinstance(result, tuple) and len(result) == 5:
+            obs, reward, terminated, truncated, info = result
+        elif isinstance(result, tuple) and len(result) == 4:
+            obs, reward, done, info = result
+            terminated = bool(done)
+            truncated = False
+        else:
+            raise TypeError("unexpected step() return")
+
+        x_pos = int(info.get("x_pos", 0))
+        last_x = self._last_x if self._last_x is not None else x_pos
+        dx = x_pos - last_x
+        self._last_x = x_pos
+
+        shaped = float(reward)
+        shaped += float(info.get("coins", 0.0)) * 10.0
+        shaped += float(info.get("x_pos", 0.0)) * 0.1
+        shaped -= float(info.get("time", 0.0)) * 0.01
+
+        if bool(info.get("flag_get", False)):
+            shaped += 500.0
+
+        if dx > 0:
+            self._stuck_steps = 0
+        else:
+            self._stuck_steps += 1
+
+        if self._stuck_steps >= self.freeze_limit and not (terminated or truncated):
+            truncated = True
+            info = dict(info)
+            info["frozen"] = True
+            info["anti_freeze_triggered"] = True
+
+        return obs, shaped, bool(terminated), bool(truncated), info
+
+    def render(self, *args: Any, **kwargs: Any) -> Any:
+        return self.env.render(*args, **kwargs)
+
+    def close(self) -> None:
+        self.env.close()
 
 
 class MaxAndSkipEnv:
@@ -62,7 +153,24 @@ class MaxAndSkipEnv:
 
     def reset(self, **kwargs: Any) -> tuple[NDArray[np.uint8], dict[str, Any]]:
         self._obs_buf.clear()
-        obs, info = self.env.reset(**kwargs)
+        seed = kwargs.pop("seed", None)
+        try:
+            if seed is None:
+                result = self.env.reset(**kwargs)
+            else:
+                result = self.env.reset(seed=seed, **kwargs)
+        except TypeError:
+            result = self.env.reset(**kwargs)
+            if seed is not None and hasattr(self.env, "seed"):
+                try:
+                    self.env.seed(seed)
+                except Exception:
+                    pass
+
+        if isinstance(result, tuple) and len(result) == 2:
+            obs, info = result
+        else:
+            obs, info = result, {}
         obs_arr = np.asarray(obs, dtype=np.uint8)
         self._obs_buf.append(obs_arr)
         return obs_arr, info
@@ -127,11 +235,14 @@ class PreprocessObs:
 
         frame = np.asarray(obs, dtype=np.uint8)
         if self.grayscale:
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        frame = cv2.resize(
-            frame,
-            (self.resize_hw[1], self.resize_hw[0]),
-            interpolation=cv2.INTER_AREA,
+            frame = np.asarray(cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), dtype=np.uint8)
+        frame = np.asarray(
+            cv2.resize(
+                frame,
+                (self.resize_hw[1], self.resize_hw[0]),
+                interpolation=cv2.INTER_AREA,
+            ),
+            dtype=np.uint8,
         )
         if self.grayscale:
             frame = frame[None, :, :]
