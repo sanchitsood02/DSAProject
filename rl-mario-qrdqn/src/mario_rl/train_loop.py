@@ -291,7 +291,15 @@ def train_mario_new(
                     )
 
         frozen = bool(info.get("frozen", False)) if isinstance(info, dict) else False
-        log.info("episode=%d return=%.1f len=%d frozen=%s", ep, ep_return, ep_len, frozen)
+        x_pos = int(info.get("x_pos", -1)) if isinstance(info, dict) else -1
+        log.info(
+            "episode=%d shaped_return=%.1f len=%d x_pos=%d frozen=%s",
+            ep,
+            ep_return,
+            ep_len,
+            x_pos,
+            frozen,
+        )
 
         payload = {
             "episode": int(ep),

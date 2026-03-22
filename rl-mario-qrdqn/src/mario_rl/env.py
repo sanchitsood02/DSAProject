@@ -70,10 +70,16 @@ class RewardAndFreezeEnv:
         self.observation_space = env.observation_space
         self.action_space = env.action_space
         self._last_x: int | None = None
+        self._last_coins: int | None = None
+        self._last_score: int | None = None
+        self._last_time: int | None = None
         self._stuck_steps = 0
 
     def reset(self, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
         self._last_x = None
+        self._last_coins = None
+        self._last_score = None
+        self._last_time = None
         self._stuck_steps = 0
         seed = kwargs.pop("seed", None)
         try:
@@ -94,6 +100,9 @@ class RewardAndFreezeEnv:
         else:
             obs, info = result, {}
         self._last_x = int(info.get("x_pos", 0)) if isinstance(info, dict) else 0
+        self._last_coins = int(info.get("coins", 0)) if isinstance(info, dict) else 0
+        self._last_score = int(info.get("score", 0)) if isinstance(info, dict) else 0
+        self._last_time = int(info.get("time", 0)) if isinstance(info, dict) else 0
         return obs, info
 
     def step(self, action: Any) -> tuple[Any, float, bool, bool, dict[str, Any]]:
@@ -112,10 +121,24 @@ class RewardAndFreezeEnv:
         dx = x_pos - last_x
         self._last_x = x_pos
 
+        coins = int(info.get("coins", 0))
+        last_coins = self._last_coins if self._last_coins is not None else coins
+        dcoins = coins - last_coins
+        self._last_coins = coins
+
+        score = int(info.get("score", 0))
+        last_score = self._last_score if self._last_score is not None else score
+        dscore = score - last_score
+        self._last_score = score
+
+        time_left = int(info.get("time", 0))
+        self._last_time = time_left
+
         shaped = float(reward)
-        shaped += float(info.get("coins", 0.0)) * 10.0
-        shaped += float(info.get("x_pos", 0.0)) * 0.1
-        shaped -= float(info.get("time", 0.0)) * 0.01
+        shaped += float(dx) * 0.1
+        shaped += float(dcoins) * 10.0
+        shaped += float(dscore) * 0.01
+        shaped -= 0.01
 
         if bool(info.get("flag_get", False)):
             shaped += 500.0
