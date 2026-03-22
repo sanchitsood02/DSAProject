@@ -53,7 +53,6 @@ def train(cfg: TrainingConfig, env_cfg: EnvConfig, device: torch.device) -> Path
         frame_stack=env_cfg.frame_stack,
         resize_hw=env_cfg.resize_hw,
         grayscale=env_cfg.grayscale,
-        render_mode="human" if render else None,
     )
 
     obs_space = env.observation_space
@@ -238,7 +237,10 @@ def train_mario_new(
         ckpt = torch.load(model_path, map_location=device)
         if isinstance(ckpt, dict) and "online_state_dict" in ckpt:
             online_sd = cast(Mapping[str, Any], ckpt["online_state_dict"])
-            target_sd = cast(Mapping[str, Any], ckpt.get("target_state_dict") or ckpt["online_state_dict"])
+            target_sd = cast(
+                Mapping[str, Any],
+                ckpt.get("target_state_dict") or ckpt["online_state_dict"],
+            )
             agent.online.load_state_dict(online_sd)
             agent.target.load_state_dict(target_sd)
             if "optimizer_state_dict" in ckpt:
